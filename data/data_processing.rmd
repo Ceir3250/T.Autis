@@ -1,0 +1,335 @@
+---
+title: "Process data for the Open Source IRAP"
+subtitle: "Calculate D1 scores, accuracy and latency summary statistics"
+author: "Ian Hussey^[Ghent University. Email: ian.hussey@ugent.be]"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    highlight: haddock
+    theme: flatly
+    toc: yes
+    toc_float: yes
+---
+
+# Usage
+
+Simply open this RMarkdown file in RStudio and hit Knit or run the code chunk below. See README for notes.
+
+All groupings  are done by a variable called "unique_identifier". This is a concation of participant, stimulus_file and date. As such, even if you are delivering the task to multiple participants simultaneously (via multiple computers), and/or duplicate participant codes are entered by accident, this unique identifier should seperate participants' data appropriately.
+
+If the script has already been run and a "processed_IRAP_data.csv" file is present, the script will throw an error. Delete this file and rerun.
+
+# To do
+
+None.
+
+```{r, message=FALSE}
+# check for all dependencies and install missing ones. 
+# solution from https://gist.github.com/stevenworthington/3178163
+auto_install_dependencies <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+}
+packages <- c("plyr", "dplyr", "tidyr", "data.table")
+auto_install_dependencies(packages)
+
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(readr)
+
+# NB Given the shared namespaces between plyr and dplyr (e.g., both 
+# contain functions called "rename"), this script specifies which 
+# library's function is to be called. Usually, loading plyr before dplyr 
+# (as done above) prevents any issues, but this method is safer.
+
+
+# data acquisition and cleaning ----------------------------------------------------
+
+# Create a list of all files in this folder that use the extension ".csv"
+files <- list.files(pattern = "\\.csv$")  
+
+# Read these files sequentially into a single data frame
+input_df <- tbl_df(rbind.fill(lapply(files, fread, header=TRUE)))  # tbl_df() requires dplyr, rbind.fill() requires plyr, fread requires data.table
+
+# NB One of two columns that are later needed are created depending on the block order condition.
+# Check if each exists, and create them if not and set to NA.  
+if("trials_Afirst.thisTrialN" %in% colnames(input_df)){
+  # column already exists: do nothing.
+} else {
+  input_df[,"trials_Afirst.thisTrialN"] <- NA
+}
+
+if("trials_Asecond.thisTrialN" %in% colnames(input_df)){
+  # column already exists: do nothing.
+} else {
+  input_df[,"trials_Asecond.thisTrialN"] <- NA
+}
+
+# NB If participants fail the practice blocks, the "trials_B.thisTrialN" column will also be absent. 
+# Create it so that n who failed prac blocks can be quantified.  
+if("trials_B.thisTrialN" %in% colnames(input_df)){
+  # column already exists: do nothing.
+} else {
+  input_df[,"trials_B.thisTrialN"] <- NA
+}
+
+
+# tidy and recitify ----------------------------------------------------
+
+cleaned_df <- input_df %>%
+  dplyr::rename(trial_type = trialType,
+                practice_block_pair = practice_blocks.thisRepN,
+                test_block_pair = test_blocks.thisRepN,
+                trial_order_a_first = trials_Afirst.thisTrialN,
+                trial_order_a_second = trials_Asecond.thisTrialN,
+                trial_order_b = trials_B.thisTrialN,
+                rt_a = required_response_A.rt,
+                rt_b = required_response_B.rt,
+                accuracy_a = feedback_response_A.corr,
+                accuracy_b = feedback_response_B.corr,
+                starting_block = StartingBlock,
+                latency_criterion = latencyCriterion,
+                accuracy_criterion = accuracyCriterion,
+                auto_response_monkey = UseMonkey,
+                labelA_text_stimuli_exemplars = labelA_stimuli_for_output,
+                labelB_text_stimuli_exemplars = labelB_stimuli_for_output,
+                targetA_text_stimuli_exemplars = targetA_stimuli_for_output,
+                targetB_text_stimuli_exemplars = targetB_stimuli_for_output,
+                labelA_image_stimuli_exemplars = labelA_image_stimuli_for_output,
+                labelB_image_stimuli_exemplars = labelB_image_stimuli_for_output,
+                targetA_image_stimuli_exemplars = targetA_image_stimuli_for_output,
+                targetB_image_stimuli_exemplars = targetB_image_stimuli_for_output) %>%
+  rowwise() %>%  # needed for the row-wise mutate() for rt and accuracy below 
+  dplyr::mutate(unique_identifier = paste(participant, stimulus_file, date, sep = '_'),
+                accuracy_a = abs(accuracy_a - 1),  # recitfies the direction of accuracy so that 0 = error and 1 = correct.
+                accuracy_b = abs(accuracy_b - 1),
+                practice_block_pair = practice_block_pair + 1,  # recifies block to start at 1
+                test_block_pair = test_block_pair + 1,
+                rt = sum(rt_a, rt_b, na.rm=TRUE),  # get all rts in one column 
+                accuracy = sum(accuracy_a, accuracy_b, na.rm=TRUE),  # get all accuracies in one column. only one block will be present per row.
+                trial_order = sum(trial_order_a_first, trial_order_a_second, trial_order_b, na.rm = TRUE),  # get all trial_order in one column. only one block will be present per row.
+                auto_response_monkey = ifelse(auto_response_monkey == "y", 
+                                              TRUE, 
+                                              ifelse(auto_response_monkey == "n", 
+                                                     FALSE, NA))) %>%  # convert y/n to TRUE/FALSE
+  ungroup() %>%  # removes rowwise
+  dplyr::select(unique_identifier,
+                stimulus_file,
+                participant,
+                starting_block,
+                practice_block_pair,
+                test_block_pair,
+                trial_order,
+                trial_type,
+                rt_a,
+                rt_b,
+                rt,
+                accuracy_a,
+                accuracy_b,
+                accuracy,
+                accuracy_criterion,
+                latency_criterion,
+                age,
+                gender,
+                date,
+                max_pairs_practice_blocks,
+                n_pairs_test_blocks,
+                moving_response_options,
+                auto_response_monkey,
+                rule_A,
+                rule_B,
+                response_option_A,
+                response_option_B,
+                labelA_text_stimuli_exemplars,
+                labelB_text_stimuli_exemplars,
+                targetA_text_stimuli_exemplars,
+                targetB_text_stimuli_exemplars,
+                labelA_image_stimuli_exemplars,
+                labelB_image_stimuli_exemplars,
+                targetA_image_stimuli_exemplars,
+                targetB_image_stimuli_exemplars)
+
+# demographics and test parameters ----------------------------------------------------
+
+# Select variables of interest
+demographics_df <-
+  cleaned_df %>%
+  dplyr::select(unique_identifier,
+                stimulus_file,
+                participant,
+                gender,
+                age,
+                date,
+                starting_block,
+                max_pairs_practice_blocks,
+                n_pairs_test_blocks,
+                latency_criterion,
+                accuracy_criterion,
+                moving_response_options,
+                auto_response_monkey,
+                rule_A,
+                rule_B,
+                response_option_A,
+                response_option_B,
+                labelA_text_stimuli_exemplars,
+                labelB_text_stimuli_exemplars,
+                targetA_text_stimuli_exemplars,
+                targetB_text_stimuli_exemplars,
+                labelA_image_stimuli_exemplars,
+                labelB_image_stimuli_exemplars,
+                targetA_image_stimuli_exemplars,
+                targetB_image_stimuli_exemplars) %>%
+  distinct(unique_identifier, .keep_all = TRUE)  
+  # NB other routines use a group_by() at the top, but this throws an error in full_join() for some reason. 
+  # Rather than bugtest, I've employed the workaround of a distinct() call at the end of the routine instead.
+
+# Calculate total number of practice block pairs completed per participant
+n_pairs_practice_blocks_df <-
+  cleaned_df %>%
+  group_by(unique_identifier) %>%
+  dplyr::summarize(n_pairs_practice_blocks = max(practice_block_pair, na.rm = TRUE))
+
+# D1 scores and mean latency ----------------------------------------------------
+
+# mean rt
+mean_rt_df <-  
+  cleaned_df %>%
+  group_by(unique_identifier) %>%
+  filter(rt <= 10000 &
+           !is.na(test_block_pair)) %>%  # test blocks only
+  dplyr::summarize(rt_mean = round(mean(rt, na.rm = TRUE), 3)*1000) %>%
+  dplyr::select(unique_identifier, 
+                rt_mean) %>%
+  ungroup()
+
+# D1 calculated from all test block rts
+D1_df <-  
+  cleaned_df %>%
+  group_by(unique_identifier,
+           test_block_pair) %>%
+  filter(rt <= 10000 &
+           !is.na(test_block_pair)) %>%  # test blocks only
+  dplyr::summarize(rt_a_mean = mean(rt_a, na.rm = TRUE),
+                   rt_b_mean = mean(rt_b, na.rm = TRUE),
+                   rt_sd = sd(rt)) %>%
+  dplyr::mutate(diff = rt_b_mean - rt_a_mean, # this is effectively a rowwise() calculation as we have group_by() participant and then summarize()'d. rowwise() not included for brevity.
+                D1 = round(diff / rt_sd, 3)) %>% 
+  ungroup() %>%
+  group_by(unique_identifier) %>%
+  dplyr::summarize(D1 = round(mean(D1), 3)) %>%
+  dplyr::select(unique_identifier, 
+                D1) %>%
+  ungroup()
+
+# D1 calculated for each of the four trial-types from all test block rts
+D1_by_tt_df <-  
+  cleaned_df %>%
+  group_by(unique_identifier,
+           test_block_pair,
+           trial_type) %>%
+  filter(rt <= 10000 &
+           !is.na(test_block_pair)) %>%  # test blocks only
+  dplyr::summarize(rt_a_mean = mean(rt_a, na.rm = TRUE),
+                   rt_b_mean = mean(rt_b, na.rm = TRUE),
+                   rt_sd = sd(rt)) %>%
+  dplyr::mutate(diff = rt_b_mean - rt_a_mean,
+                D1_by_tt = round(diff / rt_sd, 3)) %>%
+  ungroup() %>%
+  group_by(unique_identifier,
+           trial_type) %>%
+  dplyr::select(unique_identifier, 
+                trial_type,
+                D1_by_tt) %>%
+  dplyr::summarize(D1_by_tt = round(mean(D1_by_tt), 3)) %>%
+  spread(trial_type, D1_by_tt) %>%
+  dplyr::rename(D1_trial_type_1 = `1`,
+                D1_trial_type_2 = `2`,
+                D1_trial_type_3 = `3`,
+                D1_trial_type_4 = `4`)
+         
+# D1 for ODD trials by order of presentation (for split half reliability) calculated from all test block rts
+# NB internal consistency can be calculated by a spearman brown correlation or cronbach's alpha between odd and even D1 scores. Pearson's R is less appropriate.
+D1_odd_df <-  
+  cleaned_df %>%
+  group_by(unique_identifier,
+           test_block_pair) %>%
+  filter(rt <= 10000 &
+           !is.na(test_block_pair) &
+           trial_order %% 2 == 0) %>%  # odd trials only, nb count starts at 0
+  dplyr::summarize(rt_a_mean = mean(rt_a, na.rm = TRUE),
+                   rt_b_mean = mean(rt_b, na.rm = TRUE),
+                   rt_sd = sd(rt)) %>%
+  dplyr::mutate(diff = rt_b_mean - rt_a_mean, # this is effectively a rowwise() calculation as we have group_by() participant and then summarize()'d. rowwise() not included for brevity.
+                D1_odd = round(diff / rt_sd, 3)) %>% 
+  ungroup() %>%
+  group_by(unique_identifier) %>%
+  dplyr::summarize(D1_odd = round(mean(D1_odd), 3)) %>%
+  dplyr::select(unique_identifier, 
+                D1_odd) %>%
+  ungroup()
+
+# D1 for EVEN trials by order of presentation (for split half reliability) calculated from all test block rts
+D1_even_df <-  
+  cleaned_df %>%
+  group_by(unique_identifier,
+           test_block_pair) %>%
+  filter(rt <= 10000 &
+           !is.na(test_block_pair) &
+           trial_order %% 2 == 1) %>%  # even trials only, nb count starts at 0
+  dplyr::summarize(rt_a_mean = mean(rt_a, na.rm = TRUE),
+                   rt_b_mean = mean(rt_b, na.rm = TRUE),
+                   rt_sd = sd(rt)) %>%
+  dplyr::mutate(diff = rt_b_mean - rt_a_mean, # this is effectively a rowwise() calculation as we have group_by() participant and then summarize()'d. rowwise() not included for brevity.
+                D1_even = round(diff / rt_sd, 3)) %>% 
+  ungroup() %>%
+  group_by(unique_identifier) %>%
+  dplyr::summarize(D1_even = round(mean(D1_even), 3)) %>%
+  dplyr::select(unique_identifier, 
+                D1_even) %>%
+  ungroup()
+
+# percentage accuracy and percentage fast trials ----------------------------------------------------
+# add new column that records if RT < 300ms.
+# exclusions based on fast trials (>10% trials <300ms) is part of the D1 algorithm
+cleaned_df$too_fast_trial <- ifelse(cleaned_df$rt < .3, 1, 0) 
+
+# calculate % acc and % fast trials from test block data
+percentage_accuracy_and_fast_trials_df <- 
+  cleaned_df %>%
+  group_by(unique_identifier) %>%
+  filter(!is.na(test_block_pair)) %>%  # test blocks only
+  dplyr::summarize(percentage_accuracy = round(sum(accuracy)/n(), 3),
+                   percent_fast_trials = sum(too_fast_trial)/n()) %>%  # arbitrary number of test block trials
+  dplyr::mutate(exclude_based_on_fast_trials = ifelse(percent_fast_trials>=0.1, TRUE, FALSE)) %>%  
+  dplyr::select(unique_identifier,
+                percentage_accuracy,
+                exclude_based_on_fast_trials)
+
+# join data frames and quantify failed practice blocks ----------------------------------------------------
+
+output_df <- 
+  join_all(list(demographics_df,
+                n_pairs_practice_blocks_df,
+                D1_df,
+                D1_by_tt_df,
+                D1_odd_df,
+                D1_even_df,
+                mean_rt_df,
+                percentage_accuracy_and_fast_trials_df),
+           by = "unique_identifier",
+           type = "full") %>%
+  rowwise() %>%
+  mutate(passed_practice_blocks = ifelse(!is.na(D1), TRUE, FALSE))
+ 
+
+# write to disk ----------------------------------------------------
+
+output_df %>% write_csv("processed_IRAP_data.csv")
+
+```
+
+
